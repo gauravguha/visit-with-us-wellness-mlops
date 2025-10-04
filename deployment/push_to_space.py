@@ -1,19 +1,25 @@
 import os
 from huggingface_hub import HfApi
 
-# EDIT if your Space ID is different
-SPACE_REPO = "gauravguha/visit-with-us-wellness-app"
+# Read Space repo from env (set at top of pipeline.yml)
+SPACE_REPO = os.environ.get("SPACE_REPO", "gauravguha/visit-with-us-wellness-app")
 
-# Local -> destination paths in the Space repo
+# Local → path in Space repo
 FILES = {
-    "tourism_project/deployment/Dockerfile": "Dockerfile",
-    "tourism_project/deployment/app.py": "app.py",
-    "tourism_project/deployment/requirements.txt": "requirements.txt",
+    "deployment/Dockerfile": "Dockerfile",
+    "deployment/app.py": "app.py",
+    "deployment/requirements.txt": "requirements.txt",
 }
 
 def main():
     token = os.environ.get("HF_TOKEN")
-    assert token, "Set HF_TOKEN environment variable with a WRITE token (export HF_TOKEN=...)."
+    assert token, "Missing HF_TOKEN environment variable"
+
+    # Sanity check local paths
+    missing = [p for p in FILES.keys() if not os.path.exists(p)]
+    if missing:
+        raise FileNotFoundError(f"Local files not found: {missing}. CWD={os.getcwd()}")
+
     api = HfApi(token=token)
     for local, dest in FILES.items():
         api.upload_file(
@@ -21,9 +27,9 @@ def main():
             path_in_repo=dest,
             repo_id=SPACE_REPO,
             repo_type="space",
-            commit_message=f"Update {dest} via script"
+            commit_message=f"CI: update {dest}"
         )
-    print("✅ Pushed all deployment files to Space:", SPACE_REPO)
+    print(f"✅ Pushed deployment files to Space: {SPACE_REPO}")
 
 if __name__ == "__main__":
     main()

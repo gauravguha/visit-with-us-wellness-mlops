@@ -1,0 +1,2 @@
+run_id,algorithm,cv_best_auc,test_auc,test_accuracy,test_precision,test_recall,test_f1,params_json,timestamp_utc
+20251004-102915,RandomForestClassifier,0.9463,0.9703,0.9056,0.9451,0.5409,0.688,"{""model__max_depth"": null, ""model__min_samples_leaf"": 1, ""model__min_samples_split"": 2, ""model__n_estimators"": 400}",2025-10-04T10:29:15.290259Z

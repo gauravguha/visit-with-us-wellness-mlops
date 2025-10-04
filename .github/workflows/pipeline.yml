@@ -29,7 +29,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           DATASET_REPO: ${{ env.DATASET_REPO }}
         run: |
-          python tourism_project/ci/register_dataset.py
+          python ci/register_dataset.py
 
   data-prep:
     needs: register-dataset
@@ -48,7 +48,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           DATASET_REPO: ${{ env.DATASET_REPO }}
         run: |
-          python tourism_project/ci/data_prep_ci.py
+          python ci/data_prep_ci.py
 
   model-traning:
     needs: data-prep
@@ -68,7 +68,7 @@ jobs:
           MODEL_REPO: ${{ env.MODEL_REPO }}
           DATASET_REPO: ${{ env.DATASET_REPO }}
         run: |
-          python tourism_project/ci/train_and_register.py
+          python ci/train_and_register.py
 
   deploy-hosting:
     needs: [model-traning, data-prep, register-dataset]
@@ -86,4 +86,5 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          python tourism_project/deployment/push_to_space.py
+          python deployment/push_to_space.py
+

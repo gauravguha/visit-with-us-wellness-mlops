@@ -1,117 +1,119 @@
-"""
-Train the model from HF dataset train/test, evaluate, and push the model
-artifact to the Hugging Face Model Hub.
+# ci/train_and_register.py
+# Trains the RF model, logs to MLflow, and registers the model to HF Model Hub.
+# Expects env vars: HF_TOKEN, DATASET_REPO, MODEL_REPO, MLFLOW_TRACKING_URI (optional)
 
-CI env (GitHub Actions):
-- HF_TOKEN     : Write token (GitHub secret)
-- MODEL_REPO   : e.g. 'gauravguha/visit-with-us-wellness-model' (optional; default below)
-- DATASET_REPO : e.g. 'gauravguha/visit-with-us-wellness-dataset' (optional; default below)
-"""
-
-import os, json
+import os
 import pandas as pd
 from joblib import dump
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.pipeline import Pipeline
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import roc_auc_score, accuracy_score, precision_recall_fscore_support
 from huggingface_hub import HfApi
 
-DATASET_REPO = os.environ.get("DATASET_REPO", "gauravguha/visit-with-us-wellness-dataset")
-MODEL_REPO   = os.environ.get("MODEL_REPO",   "gauravguha/visit-with-us-wellness-model")
+# sklearn / mlflow
+from sklearn.model_selection import GridSearchCV
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import (
+    roc_auc_score, accuracy_score, precision_recall_fscore_support, confusion_matrix
+)
 
-TRAIN_URL = f"https://huggingface.co/datasets/{DATASET_REPO}/raw/main/train.csv"
-TEST_URL  = f"https://huggingface.co/datasets/{DATASET_REPO}/raw/main/test.csv"
+import mlflow, mlflow.sklearn
 
-def load_data():
-    train_df = pd.read_csv(TRAIN_URL)
-    test_df  = pd.read_csv(TEST_URL)
-    return train_df, test_df
+# --------------------
+# Config from env
+# --------------------
+HF_TOKEN      = os.environ.get("HF_TOKEN")
+DATASET_REPO  = os.environ.get("DATASET_REPO")   # e.g., gauravguha/visit-with-us-wellness-dataset
+MODEL_REPO    = os.environ.get("MODEL_REPO")     # e.g., gauravguha/visit-with-us-wellness-model
+TRACKING_URI  = os.environ.get("MLFLOW_TRACKING_URI", "file:mlruns")
 
-def build_pipeline(train_df):
-    TARGET = "ProdTaken"
-    DROP = ["CustomerID"]
-    X_train = train_df.drop(columns=[TARGET] + DROP, errors="ignore")
+assert HF_TOKEN, "HF_TOKEN missing"
+assert DATASET_REPO, "DATASET_REPO missing"
+assert MODEL_REPO, "MODEL_REPO missing"
 
-    cat_cols = X_train.select_dtypes(include="object").columns.tolist()
-    num_cols = X_train.select_dtypes(exclude="object").columns.tolist()
+# --------------------
+# MLflow init
+# --------------------
+mlflow.set_tracking_uri(TRACKING_URI)
+mlflow.set_experiment("wellness-predictor")
+mlflow.sklearn.autolog(silent=True, log_models=True)
 
-    preprocess = ColumnTransformer(
-        transformers=[
-            ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), cat_cols),
-            ("num", "passthrough", num_cols),
-        ]
-    )
+# --------------------
+# Load train/test from HF dataset (prepared by the data-prep job)
+# --------------------
+RAW_TRAIN = f"https://huggingface.co/datasets/{DATASET_REPO}/raw/main/train.csv"
+RAW_TEST  = f"https://huggingface.co/datasets/{DATASET_REPO}/raw/main/test.csv"
 
-    clf = RandomForestClassifier(
-        random_state=42,
-        n_estimators=400,
-        class_weight="balanced"
-    )
+train_df = pd.read_csv(RAW_TRAIN)
+test_df  = pd.read_csv(RAW_TEST)
 
-    pipe = Pipeline(steps=[("preprocess", preprocess), ("model", clf)])
-    return pipe
+TARGET = "ProdTaken"
+drop_cols = [c for c in ["CustomerID", TARGET] if c in train_df.columns]
 
-def evaluate(pipe, test_df):
-    TARGET = "ProdTaken"
-    DROP = ["CustomerID"]
-    X_test = test_df.drop(columns=[TARGET] + DROP, errors="ignore")
-    y_test = test_df[TARGET].astype(int)
+X_train = train_df.drop(columns=drop_cols, errors="ignore")
+y_train = train_df[TARGET].astype(int)
+X_test  = test_df.drop(columns=drop_cols, errors="ignore")
+y_test  = test_df[TARGET].astype(int)
 
-    y_pred  = pipe.predict(X_test)
-    y_proba = pipe.predict_proba(X_test)[:, 1]
+cat_cols = X_train.select_dtypes(include="object").columns.tolist()
+num_cols = X_train.select_dtypes(exclude="object").columns.tolist()
 
-    auc = roc_auc_score(y_test, y_proba)
-    acc = accuracy_score(y_test, y_pred)
+preprocess = ColumnTransformer(
+    transformers=[
+        ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), cat_cols),
+        ("num", "passthrough", num_cols),
+    ]
+)
+
+rf = RandomForestClassifier(class_weight="balanced", random_state=42)
+pipe = Pipeline([("preprocess", preprocess), ("model", rf)])
+
+grid = {
+    "model__n_estimators": [200, 400],
+    "model__min_samples_split": [2, 5],
+    "model__min_samples_leaf": [1, 2],
+    "model__max_depth": [None, 10],
+}
+
+# --------------------
+# Train + log with MLflow
+# --------------------
+with mlflow.start_run(run_name="rf-grid"):
+    gs = GridSearchCV(pipe, grid, cv=3, scoring="roc_auc", n_jobs=-1)
+    gs.fit(X_train, y_train)
+
+    best = gs.best_estimator_
+    y_pred  = best.predict(X_test)
+    y_proba = best.predict_proba(X_test)[:, 1]
+
+    test_auc = roc_auc_score(y_test, y_proba)
+    test_acc = accuracy_score(y_test, y_pred)
     prec, rec, f1, _ = precision_recall_fscore_support(y_test, y_pred, average="binary", zero_division=0)
 
-    return {
-        "test_auc": round(float(auc), 4),
-        "test_accuracy": round(float(acc), 4),
-        "test_precision": round(float(prec), 4),
-        "test_recall": round(float(rec), 4),
-        "test_f1": round(float(f1), 4),
-    }
+    # extra metrics + artifact
+    mlflow.log_metric("test_auc", float(test_auc))
+    mlflow.log_metric("test_accuracy", float(test_acc))
+    mlflow.log_metric("test_precision", float(prec))
+    mlflow.log_metric("test_recall", float(rec))
+    mlflow.log_metric("test_f1", float(f1))
 
-def main():
-    print(">> Loading data …")
-    train_df, test_df = load_data()
+    cm = confusion_matrix(y_test, y_pred)
+    pd.DataFrame(cm, index=["Actual 0","Actual 1"], columns=["Pred 0","Pred 1"]).to_csv("confusion_matrix.csv", index=True)
+    mlflow.log_artifact("confusion_matrix.csv")
 
-    print(">> Building pipeline …")
-    pipe = build_pipeline(train_df)
+    # Save model artifact locally (also logged by autolog)
+    dump(best, "model_pipeline.joblib")
 
-    print(">> Training …")
-    TARGET = "ProdTaken"
-    X_train = train_df.drop(columns=[TARGET, "CustomerID"], errors="ignore")
-    y_train = train_df[TARGET].astype(int)
-    pipe.fit(X_train, y_train)
+# --------------------
+# Push the model to the HF Model Hub
+# --------------------
+api = HfApi(token=HF_TOKEN)
+api.create_repo(repo_id=MODEL_REPO, repo_type="model", exist_ok=True)
+api.upload_file(
+    path_or_fileobj="model_pipeline.joblib",
+    path_in_repo="model_pipeline.joblib",
+    repo_id=MODEL_REPO,
+    repo_type="model",
+)
+print("✅ Model pushed to HF Model Hub:", MODEL_REPO)
 
-    print(">> Evaluating …")
-    metrics = evaluate(pipe, test_df)
-    print("Metrics:", metrics)
-
-    # Save artifacts
-    os.makedirs("artifacts", exist_ok=True)
-    model_path = "artifacts/model_pipeline.joblib"
-    dump(pipe, model_path)
-    with open("artifacts/metrics.json", "w") as f:
-        json.dump(metrics, f, indent=2)
-
-    print(">> Uploading model to HF Model Hub …")
-    token = os.environ.get("HF_TOKEN")
-    assert token, "Missing HF_TOKEN"
-    api = HfApi(token=token)
-    api.upload_file(
-        path_or_fileobj=model_path,
-        path_in_repo="model_pipeline.joblib",
-        repo_id=MODEL_REPO,
-        repo_type="model",
-        commit_message="CI: update model_pipeline.joblib"
-    )
-
-    print("✅ Pushed model to:", MODEL_REPO)
-    print("Final metrics:", metrics)
-
-if __name__ == "__main__":
-    main()

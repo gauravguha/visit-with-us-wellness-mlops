@@ -2,14 +2,15 @@ name: Tourism Project Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
   workflow_dispatch:
 
 env:
   PYTHON_VERSION: "3.10"
   DATASET_REPO: gauravguha/visit-with-us-wellness-dataset
-  MODEL_REPO:   gauravguha/visit-with-us-wellness-model
-  SPACE_REPO:   gauravguha/visit-with-us-wellness-app
+  MODEL_REPO: gauravguha/visit-with-us-wellness-model
+  SPACE_REPO: gauravguha/visit-with-us-wellness-app
 
 jobs:
 
@@ -18,7 +19,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: ${{ env.PYTHON_VERSION }} }
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
@@ -35,7 +37,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: ${{ env.PYTHON_VERSION }} }
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
@@ -52,7 +55,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: ${{ env.PYTHON_VERSION }} }
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
@@ -76,7 +80,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: ${{ env.PYTHON_VERSION }} }
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
@@ -85,5 +90,6 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: python deployment/push_to_space.py
+
 
 
